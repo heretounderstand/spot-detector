@@ -48,7 +48,7 @@ class ExcelReportGenerator:
         
         # Données
         for spot_nom, spot_detections in sorted(by_spot.items()):
-            chaines = set(d.enreg_chaine for d in spot_detections)
+            chaines = set(d.enreg_chaine_nom for d in spot_detections)
             avg_conf = sum(d.confidence for d in spot_detections) / len(spot_detections)
             dates = sorted([d.enreg_date for d in spot_detections])
             
@@ -80,9 +80,9 @@ class ExcelReportGenerator:
         # Grouper par chaîne
         by_chaine = {}
         for d in detections:
-            if d.enreg_chaine not in by_chaine:
-                by_chaine[d.enreg_chaine] = []
-            by_chaine[d.enreg_chaine].append(d)
+            if d.enreg_chaine_nom not in by_chaine:
+                by_chaine[d.enreg_chaine_nom] = []
+            by_chaine[d.enreg_chaine_nom].append(d)
         
         for chaine, chaine_detections in sorted(by_chaine.items()):
             spots = set(d.spot_nom for d in chaine_detections)
@@ -110,11 +110,11 @@ class ExcelReportGenerator:
         ws.append(headers)
         ExcelReportGenerator._style_header_row(ws, 1)
         
-        for d in sorted(detections, key=lambda x: (x.enreg_date, x.enreg_chaine, x.start_seconds)):
+        for d in sorted(detections, key=lambda x: (x.enreg_date, x.enreg_chaine_nom, x.start_seconds)):
             duree = d.end_seconds - d.start_seconds
             ws.append([
                 d.spot_nom,
-                d.enreg_chaine,
+                d.enreg_chaine_nom,
                 d.enreg_date,
                 d.enreg_nom,
                 d.start_time,
