@@ -23,6 +23,16 @@ class Database:
         conn = self._get_connection()
         cursor = conn.cursor()
         
+        # Table chaînes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chaines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chaine_id TEXT NOT NULL UNIQUE,
+                chaine_nom TEXT NOT NULL,
+                date_ajout TIMESTAMP NOT NULL
+            )
+        """)
+        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS spots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +46,8 @@ class Database:
             CREATE TABLE IF NOT EXISTS enregistrements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nom_fichier TEXT NOT NULL UNIQUE,
-                chaine TEXT NOT NULL,
+                chaine_id TEXT NOT NULL,
+                chaine_nom TEXT NOT NULL,
                 date_enreg TEXT NOT NULL,
                 heure_debut TEXT NOT NULL,
                 heure_fin TEXT NOT NULL,
@@ -46,7 +57,7 @@ class Database:
         """)
         
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_enreg_chaine ON enregistrements(chaine)
+            CREATE INDEX IF NOT EXISTS idx_enreg_chaine_id ON enregistrements(chaine_id)
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_enreg_date ON enregistrements(date_enreg)
@@ -76,6 +87,47 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_detection_enreg ON detections(enregistrement_id)
         """)
         
+        conn.commit()
+        conn.close()
+    
+    # ==================== CHAINES ====================
+    
+    def add_or_get_chaine(self, chaine_id: str, chaine_nom: str) -> int:
+        """Ajouter une chaîne ou récupérer son ID si existe"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM chaines WHERE chaine_id = ?", (chaine_id,))
+        row = cursor.fetchone()
+        
+        if row:
+            conn.close()
+            return row['id']
+        
+        cursor.execute("""
+            INSERT INTO chaines (chaine_id, chaine_nom, date_ajout)
+            VALUES (?, ?, ?)
+        """, (chaine_id, chaine_nom, datetime.now()))
+        
+        chaine_pk = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return chaine_pk
+    
+    def get_all_chaines(self) -> List[tuple]:
+        """Liste des chaînes [(chaine_id, chaine_nom), ...]"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT chaine_id, chaine_nom FROM chaines ORDER BY chaine_nom")
+        rows = cursor.fetchall()
+        conn.close()
+        return [(row['chaine_id'], row['chaine_nom']) for row in rows]
+    
+    def update_chaine_nom(self, chaine_id: str, nouveau_nom: str):
+        """Modifier le nom d'une chaîne"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE chaines SET chaine_nom = ? WHERE chaine_id = ?", (nouveau_nom, chaine_id))
         conn.commit()
         conn.close()
     
@@ -146,16 +198,20 @@ class Database:
     # ==================== ENREGISTREMENTS ====================
     
     def add_enregistrement(self, enreg: Enregistrement) -> int:
+        """Ajouter un enregistrement, retourne l'ID"""
+        # Ajouter la chaîne si pas déjà présente
+        self.add_or_get_chaine(enreg.chaine_id, enreg.chaine_nom)
+        
         conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
             cursor.execute("""
                 INSERT INTO enregistrements 
-                (nom_fichier, chaine, date_enreg, heure_debut, heure_fin, contenu_srt, date_ajout)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (nom_fichier, chaine_id, chaine_nom, date_enreg, heure_debut, heure_fin, contenu_srt, date_ajout)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                enreg.nom_fichier, enreg.chaine, enreg.date_enreg,
+                enreg.nom_fichier, enreg.chaine_id, enreg.chaine_nom, enreg.date_enreg,
                 enreg.heure_debut, enreg.heure_fin, enreg.contenu_srt, enreg.date_ajout
             ))
             enreg_id = cursor.lastrowid
@@ -178,7 +234,7 @@ class Database:
     
     def get_enregistrements_by_filters(
         self, 
-        chaines: Optional[List[str]] = None,
+        chaine_ids: Optional[List[str]] = None,
         date_debut: Optional[str] = None,
         date_fin: Optional[str] = None
     ) -> List[Enregistrement]:
@@ -188,10 +244,10 @@ class Database:
         query = "SELECT * FROM enregistrements WHERE 1=1"
         params = []
         
-        if chaines:
-            placeholders = ','.join('?' * len(chaines))
-            query += f" AND chaine IN ({placeholders})"
-            params.extend(chaines)
+        if chaine_ids:
+            placeholders = ','.join('?' * len(chaine_ids))
+            query += f" AND chaine_id IN ({placeholders})"
+            params.extend(chaine_ids)
         
         if date_debut:
             query += " AND date_enreg >= ?"
@@ -225,20 +281,13 @@ class Database:
         conn.close()
         return deleted
     
-    def get_all_chaines(self) -> List[str]:
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT chaine FROM enregistrements ORDER BY chaine")
-        rows = cursor.fetchall()
-        conn.close()
-        return [row['chaine'] for row in rows]
-    
     @staticmethod
     def _row_to_enregistrement(row) -> Enregistrement:
         return Enregistrement(
             id=row['id'],
             nom_fichier=row['nom_fichier'],
-            chaine=row['chaine'],
+            chaine_id=row['chaine_id'],
+            chaine_nom=row['chaine_nom'],
             date_enreg=row['date_enreg'],
             heure_debut=row['heure_debut'],
             heure_fin=row['heure_fin'],
@@ -273,7 +322,7 @@ class Database:
         self,
         spot_ids: Optional[List[int]] = None,
         enreg_ids: Optional[List[int]] = None,
-        chaines: Optional[List[str]] = None,
+        chaine_ids: Optional[List[str]] = None,
         date_debut: Optional[str] = None,
         date_fin: Optional[str] = None
     ) -> List[Detection]:
@@ -285,7 +334,8 @@ class Database:
                 d.*,
                 s.nom_campagne as spot_nom,
                 e.nom_fichier as enreg_nom,
-                e.chaine as enreg_chaine,
+                e.chaine_id as enreg_chaine_id,
+                e.chaine_nom as enreg_chaine_nom,
                 e.date_enreg as enreg_date
             FROM detections d
             JOIN spots s ON d.spot_id = s.id
@@ -304,10 +354,10 @@ class Database:
             query += f" AND d.enregistrement_id IN ({placeholders})"
             params.extend(enreg_ids)
         
-        if chaines:
-            placeholders = ','.join('?' * len(chaines))
-            query += f" AND e.chaine IN ({placeholders})"
-            params.extend(chaines)
+        if chaine_ids:
+            placeholders = ','.join('?' * len(chaine_ids))
+            query += f" AND e.chaine_id IN ({placeholders})"
+            params.extend(chaine_ids)
         
         if date_debut:
             query += " AND e.date_enreg >= ?"
@@ -337,7 +387,8 @@ class Database:
                 date_detection=datetime.fromisoformat(row['date_detection']),
                 spot_nom=row['spot_nom'],
                 enreg_nom=row['enreg_nom'],
-                enreg_chaine=row['enreg_chaine'],
+                enreg_chaine_id=row['enreg_chaine_id'],
+                enreg_chaine_nom=row['enreg_chaine_nom'],
                 enreg_date=row['enreg_date']
             )
             for row in rows
