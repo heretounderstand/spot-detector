@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import re
 from database import Database
 from models import Spot, Enregistrement
 from detector_v2 import SpotDetector
@@ -40,7 +41,7 @@ with col4:
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📤 Importer", "🔍 Analyser", "📊 Rapports", "⚙️ Gérer"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 Importer", "🔍 Analyser", "📊 Rapports", "📺 Chaînes", "⚙️ Gérer"])
 
 # ==================== ONGLET 1: IMPORTER ====================
 with tab1:
@@ -85,18 +86,25 @@ with tab1:
                 skipped = 0
                 for file in rec_files:
                     content = file.read().decode("utf-8")
-                    enreg = Enregistrement.from_filename(file.name, content)
-                    if enreg:
-                        enreg_id = db.add_enregistrement(enreg)
-                        if enreg_id:
-                            added += 1
+                    # Utiliser chaine_id comme nom par défaut
+                    pattern = r'^([^_]+)_'
+                    match = re.match(pattern, file.name)
+                    if match:
+                        chaine_id = match.group(1)
+                        enreg = Enregistrement.from_filename(file.name, content, chaine_id)
+                        if enreg:
+                            enreg_id = db.add_enregistrement(enreg)
+                            if enreg_id:
+                                added += 1
+                        else:
+                            skipped += 1
                     else:
                         skipped += 1
                 
                 if added > 0:
                     st.success(f"✅ {added} enregistrement(s) importé(s)")
                 if skipped > 0:
-                    st.warning(f"⚠️ {skipped} fichier(s) ignoré(s) (format invalide)")
+                    st.warning(f"⚠️ {skipped} fichier(s) ignoré(s)")
                 st.rerun()
 
 # ==================== ONGLET 2: ANALYSER ====================
@@ -123,12 +131,14 @@ with tab2:
                 default=list(spot_options.keys())[:1]
             )
             
-            all_chaines = db.get_all_chaines()
-            selected_chaines = st.multiselect(
+            all_chaines_tuples = db.get_all_chaines()
+            chaine_display = {f"{nom} ({cid})": cid for cid, nom in all_chaines_tuples}
+            selected_chaines_display = st.multiselect(
                 "Chaînes",
-                options=all_chaines,
-                default=all_chaines
+                options=list(chaine_display.keys()),
+                default=list(chaine_display.keys())
             )
+            selected_chaines = [chaine_display[d] for d in selected_chaines_display]
             
             col_d1, col_d2 = st.columns(2)
             with col_d1:
@@ -146,7 +156,7 @@ with tab2:
                     st.error("Sélectionnez au moins un spot")
                 else:
                     filtered_enregs = db.get_enregistrements_by_filters(
-                        chaines=selected_chaines,
+                        chaine_ids=selected_chaines if selected_chaines else None,
                         date_debut=str(date_debut),
                         date_fin=str(date_fin)
                     )
@@ -166,7 +176,8 @@ with tab2:
                             
                             status.text(f"Analyse: {spot_name} ({idx+1}/{len(selected_spots)})")
                             
-                            enreg_data = [(e.id, e.contenu_srt) for e in filtered_enregs]
+                            # Inclure heure_debut dans les données d'enregistrement
+                            enreg_data = [(e.id, e.contenu_srt, e.heure_debut) for e in filtered_enregs]
                             detections = detector.detect_spot_in_enregistrements(
                                 spot_id,
                                 spot.contenu_srt,
@@ -200,11 +211,14 @@ with tab3:
             )
         
         with col2:
-            chaines_filter = st.multiselect(
+            all_chaines_tuples_r = db.get_all_chaines()
+            chaine_display_r = {f"{nom} ({cid})": cid for cid, nom in all_chaines_tuples_r}
+            chaines_filter_display = st.multiselect(
                 "Chaînes",
-                options=db.get_all_chaines(),
+                options=list(chaine_display_r.keys()),
                 key="rapport_chaines"
             )
+            chaines_filter = [chaine_display_r[d] for d in chaines_filter_display]
         
         with col3:
             all_enregs_rapport = db.get_all_enregistrements()
@@ -221,7 +235,7 @@ with tab3:
     
     detections = db.get_detections_enriched(
         spot_ids=spot_ids_filter,
-        chaines=chaines_filter if chaines_filter else None,
+        chaine_ids=chaines_filter if chaines_filter else None,
         date_debut=str(date_debut_r) if all_enregs_rapport else None,
         date_fin=str(date_fin_r) if all_enregs_rapport else None
     )
@@ -246,7 +260,7 @@ with tab3:
         for d in detections:
             df_data.append({
                 "Spot": d.spot_nom,
-                "Chaîne": d.enreg_chaine,
+                "Chaîne": d.enreg_chaine_nom,
                 "Date": d.enreg_date,
                 "Début": d.start_time,
                 "Fin": d.end_time,
@@ -277,8 +291,40 @@ with tab3:
                     use_container_width=True
                 )
 
-# ==================== ONGLET 4: GÉRER ====================
+# ==================== ONGLET 4: CHAÎNES ====================
 with tab4:
+    st.header("📺 Gestion des Chaînes")
+    
+    all_chaines = db.get_all_chaines()
+    
+    if not all_chaines:
+        st.info("Aucune chaîne. Importez des enregistrements pour créer des chaînes.")
+    else:
+        st.subheader("Renommer les chaînes")
+        
+        for chaine_id, chaine_nom in all_chaines:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            
+            with col1:
+                st.code(chaine_id)
+            
+            with col2:
+                new_name = st.text_input(
+                    "Nom",
+                    value=chaine_nom,
+                    key=f"rename_{chaine_id}",
+                    label_visibility="collapsed"
+                )
+            
+            with col3:
+                if st.button("💾 Sauver", key=f"save_{chaine_id}"):
+                    if new_name and new_name != chaine_nom:
+                        db.update_chaine_nom(chaine_id, new_name)
+                        st.success("✅ Mis à jour")
+                        st.rerun()
+
+# ==================== ONGLET 5: GÉRER ====================
+with tab5:
     st.header("⚙️ Gestion des Données")
     
     col1, col2 = st.columns(2)
@@ -307,7 +353,7 @@ with tab4:
             for enreg in enregs_list[:20]:
                 col_e1, col_e2 = st.columns([3, 1])
                 with col_e1:
-                    st.text(f"📺 Ch.{enreg.chaine} - {enreg.date_enreg}")
+                    st.text(f"📺 {enreg.chaine_nom} - {enreg.date_enreg}")
                 with col_e2:
                     if st.button("🗑️", key=f"del_enreg_{enreg.id}"):
                         db.delete_enregistrement(enreg.id)
