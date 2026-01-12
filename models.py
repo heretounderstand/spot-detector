@@ -5,6 +5,15 @@ import re
 
 
 @dataclass
+class Chaine:
+    """Modèle pour une chaîne TV"""
+    id: Optional[int]
+    chaine_id: str  # Identifiant dans nom fichier (ex: "CRTV", "3")
+    chaine_nom: str  # Nom affiché (ex: "CRTV", "Canal 3")
+    date_ajout: datetime
+
+
+@dataclass
 class Spot:
     """Modèle pour un spot publicitaire"""
     id: Optional[int]
@@ -29,7 +38,8 @@ class Enregistrement:
     """Modèle pour un enregistrement"""
     id: Optional[int]
     nom_fichier: str
-    chaine: str
+    chaine_id: str
+    chaine_nom: str
     date_enreg: str  # YYYY-MM-DD
     heure_debut: str  # HH:MM:SS
     heure_fin: str  # HH:MM:SS
@@ -37,20 +47,21 @@ class Enregistrement:
     date_ajout: datetime
     
     @classmethod
-    def from_filename(cls, filename: str, content: str) -> Optional['Enregistrement']:
-        """Parser le nom: 3_2025-12-29_05-31-25_06-01-26.srt"""
-        pattern = r'^(\d+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})\.srt$'
+    def from_filename(cls, filename: str, content: str, chaine_nom: str = None) -> Optional['Enregistrement']:
+        """Parser le nom: CHAINE_YYYY-MM-DD_HH-MM-SS_HH-MM-SS.srt (CHAINE peut être texte ou nombre)"""
+        pattern = r'^([^_]+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})\.srt$'
         match = re.match(pattern, filename)
         
         if not match:
             return None
         
-        chaine, date, debut, fin = match.groups()
+        chaine_id, date, debut, fin = match.groups()
         
         return cls(
             id=None,
             nom_fichier=filename,
-            chaine=chaine,
+            chaine_id=chaine_id,
+            chaine_nom=chaine_nom or chaine_id,
             date_enreg=date,
             heure_debut=debut.replace('-', ':'),
             heure_fin=fin.replace('-', ':'),
@@ -76,5 +87,6 @@ class Detection:
     # Données enrichies (jointures)
     spot_nom: Optional[str] = None
     enreg_nom: Optional[str] = None
-    enreg_chaine: Optional[str] = None
+    enreg_chaine_id: Optional[str] = None
+    enreg_chaine_nom: Optional[str] = None
     enreg_date: Optional[str] = None
