@@ -3,7 +3,7 @@ from srt_parser import Subtitle, SRTParser
 from fuzzy_matcher import FuzzyMatcher
 from models import Detection
 from config import DEFAULT_THRESHOLD, DEFAULT_MAX_DISTANCE
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class SpotDetector:
         self,
         spot_id: int,
         spot_content: str,
-        enregistrements: List[tuple]  # [(enreg_id, enreg_content), ...]
+        enregistrements: List[tuple]  # [(enreg_id, enreg_content, heure_debut), ...]
     ) -> List[Detection]:
         """Détecter un spot dans plusieurs enregistrements"""
         parser = SRTParser()
@@ -37,7 +37,7 @@ class SpotDetector:
         
         all_detections = []
         
-        for enreg_id, enreg_content in enregistrements:
+        for enreg_id, enreg_content, heure_debut in enregistrements:
             recording_subtitles = parser.parse(enreg_content)
             
             if not recording_subtitles:
@@ -53,11 +53,12 @@ class SpotDetector:
                     spot_segment,
                     recording_subtitles,
                     segment_pos_in_spot,
-                    spot_duration
+                    spot_duration,
+                    heure_debut
                 )
                 all_detections.extend(matches)
         
-        return self._filter_and_group_matches(all_detections)
+        return self._filter_and_group_matches(all_detections, spot_duration)
     
     def _find_segment_in_recording(
         self,
@@ -66,11 +67,15 @@ class SpotDetector:
         spot_segment: Subtitle,
         recording_subtitles: List[Subtitle],
         segment_pos_in_spot: float,
-        spot_duration: float
+        spot_duration: float,
+        heure_debut: str
     ) -> List[Detection]:
         """Chercher un segment du spot dans l'enregistrement"""
         matches = []
         spot_text = spot_segment.text
+        
+        # Convertir heure_debut en secondes depuis minuit
+        base_seconds = self._time_to_seconds(heure_debut)
         
         for rec_subtitle in recording_subtitles:
             matched_text, confidence = self.matcher.find_in_text(
@@ -82,14 +87,18 @@ class SpotDetector:
                 estimated_spot_start = rec_subtitle.start_seconds - segment_pos_in_spot
                 estimated_spot_end = estimated_spot_start + spot_duration
                 
+                # Calculer l'heure réelle dans la journée
+                real_start_seconds = base_seconds + estimated_spot_start
+                real_end_seconds = base_seconds + estimated_spot_end
+                
                 match = Detection(
                     id=None,
                     spot_id=spot_id,
                     enregistrement_id=enreg_id,
-                    start_time=self._seconds_to_time(estimated_spot_start),
-                    start_seconds=estimated_spot_start,
-                    end_time=self._seconds_to_time(estimated_spot_end),
-                    end_seconds=estimated_spot_end,
+                    start_time=self._seconds_to_time(real_start_seconds),
+                    start_seconds=real_start_seconds,
+                    end_time=self._seconds_to_time(real_end_seconds),
+                    end_seconds=real_end_seconds,
                     confidence=confidence,
                     match_type="exact" if confidence == 100 else "fuzzy",
                     date_detection=datetime.now()
@@ -98,8 +107,12 @@ class SpotDetector:
         
         return matches
     
-    def _filter_and_group_matches(self, matches: List[Detection]) -> List[Detection]:
-        """Filtrer doublons et regrouper par spot"""
+    def _filter_and_group_matches(self, matches: List[Detection], spot_duration: float) -> List[Detection]:
+        """
+        Filtrer doublons intelligemment:
+        - Si plusieurs détections du même spot avec débuts < durée_spot, garder la plus ancienne
+        - Sinon ce sont des spots différents
+        """
         if not matches:
             return matches
         
@@ -123,16 +136,23 @@ class SpotDetector:
                 same_spot_group = [current]
                 j = i + 1
                 
+                # Regrouper toutes les détections dont le début est < spot_duration du premier
                 while j < len(enreg_matches_sorted):
                     next_match = enreg_matches_sorted[j]
-                    if next_match.start_seconds - current.start_seconds < 2:
+                    time_diff = next_match.start_seconds - current.start_seconds
+                    
+                    # Si l'écart < durée du spot, c'est le même spot mal détecté
+                    if time_diff < spot_duration:
                         same_spot_group.append(next_match)
                         j += 1
                     else:
                         break
                 
-                best = max(same_spot_group, key=lambda m: m.confidence)
+                # Garder celui avec le timestamp le plus ancien (= le vrai début du spot)
+                # et la meilleure confiance en cas d'égalité
+                best = min(same_spot_group, key=lambda m: (m.start_seconds, -m.confidence))
                 kept.append(best)
+                
                 i = j if j > i + 1 else i + 1
             
             filtered.extend(kept)
@@ -141,8 +161,19 @@ class SpotDetector:
         return filtered
     
     @staticmethod
+    def _time_to_seconds(time_str: str) -> float:
+        """Convertir HH:MM:SS en secondes depuis minuit"""
+        parts = time_str.split(':')
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = int(parts[2])
+        return hours * 3600 + minutes * 60 + seconds
+    
+    @staticmethod
     def _seconds_to_time(seconds: float) -> str:
-        """Convertir secondes en HH:MM:SS,MMM"""
+        """Convertir secondes depuis minuit en HH:MM:SS,MMM"""
+        # Gérer le dépassement de 24h
+        seconds = seconds % 86400  # 86400 = 24*3600
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = seconds % 60
