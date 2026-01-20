@@ -45,7 +45,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 Importer", "🔍 Analyser", "📊 
 
 # ==================== ONGLET 1: IMPORTER ====================
 with tab1:
-    st.header("📤 Importer SRT")
+    st.header("📤 Importer")
     
     col1, col2 = st.columns(2)
     
@@ -71,7 +71,7 @@ with tab1:
                 st.rerun()
     
     with col2:
-        st.subheader("📹 Enregistrements")
+        st.subheader("📹 Transcription Enregistrements")
         rec_files = st.file_uploader(
             "Fichiers SRT des enregistrements",
             type=["srt"],
@@ -363,3 +363,4 @@ with tab5:
                 st.caption(f"... et {len(enregs_list) - 20} autres")
         else:
             st.info("Aucun enregistrement")
+
